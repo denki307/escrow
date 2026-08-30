@@ -14,6 +14,7 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID", "0"))
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
+GROUP_INVITE_LINK = os.getenv("GROUP_INVITE_LINK", "https://t.me/+your_invite_link") # Private Group Invite Link
 
 app = Client("escrow_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -154,15 +155,29 @@ async def parse_and_create_deal(client: Client, chat_id: int, text: str, reply_m
     try:
         b_user = await client.get_users(buyer.replace("@", ""))
         buyer_id = b_user.id
-    except:
+        # Automatically send group join link to Buyer DM if resolved
+        await client.send_message(buyer_id, f"🛡️ **New Escrow Deal Created (`#{ticket_id if 'ticket_id' in locals() else 'New'}`)**\nPlease join the escrow group using the link below:\n🔗 {GROUP_INVITE_LINK}")
+    except Exception:
         pass
+
     try:
         s_user = await client.get_users(seller.replace("@", ""))
         seller_id = s_user.id
-    except:
+        # Automatically send group join link to Seller DM if resolved
+        await client.send_message(seller_id, f"🛡️ **New Escrow Deal Created (`#{ticket_id if 'ticket_id' in locals() else 'New'}`)**\nPlease join the escrow group using the link below:\n🔗 {GROUP_INVITE_LINK}")
+    except Exception:
         pass
 
     ticket_id = str(random.randint(100000, 999999))
+    
+    # Also notify buyer/seller with the generated ticket ID if possible
+    for uid in [buyer_id, seller_id]:
+        if uid:
+            try:
+                await client.send_message(uid, f"📌 Your Deal Ticket ID is: `#{ticket_id}`")
+            except:
+                pass
+
     initial_buttons = [
         [InlineKeyboardButton("✅ Accept Deal", callback_data=f"accept_{ticket_id}")],
         [InlineKeyboardButton("🔴 Cancel Deal", callback_data=f"cancel_{ticket_id}")]
@@ -202,7 +217,7 @@ async def parse_and_create_deal(client: Client, chat_id: int, text: str, reply_m
         "release_triggered": False,
         "msg_id": sent_msg.id
     }
-    await client.send_message(chat_id, f"✅ Deal ticket `#{ticket_id}` created successfully!")
+    await client.send_message(chat_id, f"✅ Deal ticket `#{ticket_id}` created successfully and group links sent to Buyer/Seller!")
 
 @app.on_callback_query(filters.regex(r"accept_(\d+)"))
 async def accept_deal(client: Client, callback_query):
@@ -271,7 +286,7 @@ async def handle_admin_actions(client: Client, callback_query):
                     pass
 
         await callback_query.answer("Deal completed & users removed!")
-        updated_text = callback_query.message.text + f"\n\n✅ **Status: Deal Completed Successfully!**\n🕒 Completed At: {deal_info['completed_at']}"
+        updated_text = callback_query.message.text + f"\n\n✅ **Status: Deal Completed Successfully!**\n🕒 Completed At: {deal_info['completed_id'] if 'completed_id' in deal_info else deal_info['completed_at']}"
         await callback_query.message.edit_text(updated_text, reply_markup=None)
 
         if LOG_CHANNEL_ID != 0:
@@ -305,7 +320,7 @@ async def payout_timer(client: Client, chat_id: int, ticket_id: str):
     await asyncio.sleep(5 * 60)
     deal_info = deals_db.get(ticket_id)
     if deal_info and deal_info.get("release_triggered"):
-        await client.send_message(chat_id, f"⚠️ **Payout Alert!** 5 minutes passed for Deal `#{ticket_id}`. Confirm payment and click **✅ Completed**!")
+        await client.send_memory(chat_id, f"⚠️ **Payout Alert!** 5 minutes passed for Deal `#{ticket_id}`. Confirm payment and click **✅ Completed**!") if hasattr(client, 'send_memory') else await client.send_message(chat_id, f"⚠️ **Payout Alert!** 5 minutes passed for Deal `#{ticket_id}`. Confirm payment and click **✅ Completed**!")
 
 if __name__ == "__main__":
     app.run()
