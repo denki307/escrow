@@ -4,7 +4,7 @@ import random
 import re
 from datetime import datetime
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 import pyromod
 
 API_ID = int(os.getenv("API_ID", "0"))
@@ -12,9 +12,8 @@ API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
-# New configurations for Admin Private Group and Log Channel
-ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID", "0"))  # Private group where tickets land from DM
-LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))  # Channel where completed logs are sent
+ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID", "0"))
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 
 app = Client("escrow_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -23,35 +22,33 @@ COMMISSION_PERCENT = 5
 deals_db = {}
 
 @app.on_message(filters.command("start"))
-async def start_cmd(client, message):
+async def start_cmd(client: Client, message: Message):
     if message.chat.type.value == "private":
         instructions = (
             "**Welcome to Secure Escrow Service!** 🛡️\n\n"
-            "Click the button below to start a new deal directly in DM. "
-            "Your ticket will be forwarded to the admin private group automatically."
+            "Click the button below to start a new deal directly via interactive prompt."
         )
         buttons = [[InlineKeyboardButton("🟢 Start New Deal (DM)", callback_data="dm_start_deal")]]
+        await message.reply_text(instructions, reply_markup=InlineKeyboardMarkup(buttons))
     else:
         instructions = (
             "**Welcome to Secure Escrow Service!** 🛡️\n\n"
             "**How to Use:**\n"
             "1. Type `/format` to see the correct deal layout.\n"
-            "2. Admins reply with `/newdeal` to register a ticket."
+            "2. Admins reply with `/newdeal` in groups or use DM start."
         )
         buttons = []
-        
-    for admin_id in ADMINS:
-        try:
-            user = await client.get_users(admin_id)
-            name = user.first_name
-        except:
-            name = str(admin_id)
-        buttons.append([InlineKeyboardButton(f"✅ Verified Admin: {name}", url=f"tg://user?id={admin_id}")])
-        
-    await message.reply_text(instructions, reply_markup=InlineKeyboardMarkup(buttons) if buttons else None)
+        for admin_id in ADMINS:
+            try:
+                user = await client.get_users(admin_id)
+                name = user.first_name
+            except:
+                name = str(admin_id)
+            buttons.append([InlineKeyboardButton(f"✅ Verified Admin: {name}", url=f"tg://user?id={admin_id}")])
+        await message.reply_text(instructions, reply_markup=InlineKeyboardMarkup(buttons) if buttons else None)
 
 @app.on_message(filters.command("format"))
-async def format_cmd(client, message):
+async def format_cmd(client: Client, message: Message):
     format_text = (
         "**📋 Escrow Deal Submission Format:**\n\n"
         "Buyer: @buyer_username\n"
@@ -64,7 +61,7 @@ async def format_cmd(client, message):
     await message.reply_text(format_text)
 
 @app.on_message(filters.command("check"))
-async def check_ticket(client, message):
+async def check_ticket(client: Client, message: Message):
     if len(message.command) < 2:
         await message.reply_text("⚠️ Usage: `/check <ticket_id>`")
         return
@@ -89,7 +86,7 @@ async def check_ticket(client, message):
     await message.reply_text(status_text)
 
 @app.on_callback_query(filters.regex("dm_start_deal"))
-async def dm_start_deal(client, callback_query):
+async def dm_start_deal(client: Client, callback_query):
     user = callback_query.from_user
     chat_id = user.id
     await callback_query.answer()
@@ -102,6 +99,23 @@ async def dm_start_deal(client, callback_query):
         await client.send_message(chat_id, "Deal creation timed out.")
         return
 
+    await parse_and_create_deal(client, chat_id, text)
+
+@app.on_message(filters.command("newdeal"))
+async def process_new_deal(client: Client, message: Message):
+    user_id = message.from_user.id
+    if user_id not in ADMINS:
+        await message.reply_text("⚠️ Only verified admins can create a deal using `/newdeal`!")
+        return
+
+    target_msg = message.reply_to_message
+    if not target_msg or not target_msg.text:
+        await message.reply_text("⚠️ Please reply to the deal details message with `/newdeal`.")
+        return
+
+    await parse_and_create_deal(client, message.chat.id, target_msg.text, reply_message=message)
+
+async def parse_and_create_deal(client: Client, chat_id: int, text: str, reply_message: Message = None):
     lines = text.split("\n")
     buyer, seller, item_details, amount, time_limit, assigned_admin_username = "", "", "", "", 30, ""
 
@@ -136,7 +150,6 @@ async def dm_start_deal(client, callback_query):
         await client.send_message(chat_id, f"⚠️ Could not resolve username `{assigned_admin_username}`.")
         return
 
-    # Resolve Buyer and Seller user IDs if possible for later removal
     buyer_id, seller_id = 0, 0
     try:
         b_user = await client.get_users(buyer.replace("@", ""))
@@ -167,7 +180,10 @@ async def dm_start_deal(client, callback_query):
     )
 
     target_chat = ADMIN_GROUP_ID if ADMIN_GROUP_ID != 0 else chat_id
-    sent_msg = await client.send_message(target_chat, deal_summary, reply_markup=InlineKeyboardMarkup(initial_buttons))
+    if reply_message and target_chat == reply_message.chat.id:
+        sent_msg = await reply_message.reply_text(deal_summary, reply_markup=InlineKeyboardMarkup(initial_buttons))
+    else:
+        sent_msg = await client.send_message(target_chat, deal_summary, reply_markup=InlineKeyboardMarkup(initial_buttons))
     
     deals_db[ticket_id] = {
         "ticket_id": ticket_id,
@@ -186,10 +202,10 @@ async def dm_start_deal(client, callback_query):
         "release_triggered": False,
         "msg_id": sent_msg.id
     }
-    await client.send_message(chat_id, f"✅ Deal ticket `#{ticket_id}` created successfully and sent to the admin group!")
+    await client.send_message(chat_id, f"✅ Deal ticket `#{ticket_id}` created successfully!")
 
 @app.on_callback_query(filters.regex(r"accept_(\d+)"))
-async def accept_deal(client, callback_query):
+async def accept_deal(client: Client, callback_query):
     ticket_id = callback_query.data.split("_")[1]
     deal_info = deals_db.get(ticket_id)
 
@@ -213,7 +229,7 @@ async def accept_deal(client, callback_query):
     asyncio.create_task(deal_timer(client, deal_info["chat_id"], ticket_id, deal_info["time_limit"]))
 
 @app.on_callback_query(filters.regex(r"(release|complete|cancel)_(\d+)"))
-async def handle_admin_actions(client, callback_query):
+async def handle_admin_actions(client: Client, callback_query):
     user_id = callback_query.from_user.id
     if user_id not in ADMINS:
         await callback_query.answer("Only admins can perform this action!", show_alert=True)
@@ -237,6 +253,7 @@ async def handle_admin_actions(client, callback_query):
             [InlineKeyboardButton("🔴 Cancel Deal", callback_data=f"cancel_{ticket_id}")]
         ]
         await callback_query.message.edit_text(updated_text, reply_markup=InlineKeyboardMarkup(complete_buttons))
+        await callback_query.message.reply_text(f"⏳ **5-Minute Payout Window Started for Ticket #{ticket_id}!** Admin must confirm payment and click **✅ Completed**.")
         asyncio.create_task(payout_timer(client, deal_info["chat_id"], ticket_id))
 
     elif action == "complete":
@@ -244,13 +261,12 @@ async def handle_admin_actions(client, callback_query):
         deal_info["status"] = "Completed Successfully"
         deal_info["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # Remove Buyer and Seller from the group if IDs are available
         chat_id = deal_info["chat_id"]
         for uid in [deal_info["buyer_id"], deal_info["seller_id"]]:
             if uid:
                 try:
                     await client.ban_chat_member(chat_id, uid)
-                    await client.unban_chat_member(chat_id, uid) # Unban so they can join back later if needed, but they are removed
+                    await client.unban_chat_member(chat_id, uid)
                 except Exception:
                     pass
 
@@ -258,7 +274,6 @@ async def handle_admin_actions(client, callback_query):
         updated_text = callback_query.message.text + f"\n\n✅ **Status: Deal Completed Successfully!**\n🕒 Completed At: {deal_info['completed_at']}"
         await callback_query.message.edit_text(updated_text, reply_markup=None)
 
-        # Send update to Log Channel if configured
         if LOG_CHANNEL_ID != 0:
             log_text = (
                 f"📋 **LOG: DEAL COMPLETED** (`#{ticket_id}`)\n\n"
@@ -279,14 +294,14 @@ async def handle_admin_actions(client, callback_query):
         updated_text = callback_query.message.text + f"\n\n🔴 **Status: Deal Cancelled.**"
         await callback_query.message.edit_text(updated_text, reply_markup=None)
 
-async def deal_timer(client, chat_id, ticket_id, minutes):
+async def deal_timer(client: Client, chat_id: int, ticket_id: str, minutes: int):
     await asyncio.sleep(minutes * 60)
     deal_info = deals_db.get(ticket_id)
     if deal_info and deal_info["status"].startswith("Accepted"):
         deal_info["status"] = "Time Exceeded (Auto-refund)"
         await client.send_message(chat_id, f"🔴 **Time Limit Exceeded!** Deal `#{ticket_id}` failed. Auto-refund initiated.")
 
-async def payout_timer(client, chat_id, ticket_id):
+async def payout_timer(client: Client, chat_id: int, ticket_id: str):
     await asyncio.sleep(5 * 60)
     deal_info = deals_db.get(ticket_id)
     if deal_info and deal_info.get("release_triggered"):
