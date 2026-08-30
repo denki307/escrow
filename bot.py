@@ -1,18 +1,19 @@
+import os
 import asyncio
 import re
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import pyromod
 
-# Configuration
-API_ID = "YOUR_API_ID"
-API_HASH = "YOUR_API_HASH"
-BOT_TOKEN = "YOUR_BOT_TOKEN"
-OWNER_ID = 123456789  # Replace with your Telegram User ID
+# Load from Heroku Config Vars
+API_ID = int(os.getenv("API_ID", "0"))
+API_HASH = os.getenv("API_HASH", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 app = Client("escrow_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-ADMINS = [OWNER_ID]
+ADMINS = [OWNER_ID] if OWNER_ID else []
 COMMISSION_PERCENT = 5
 active_deals = {}
 
